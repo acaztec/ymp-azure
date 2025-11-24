@@ -1,7 +1,7 @@
 import { AdvisorAssessment, FriendAssessmentShare, Profile } from '../types';
 import { EmailService } from './emailService';
 import { AuthService } from './authService';
-import { supabase } from '../lib/supabase';
+import { callApi } from '../utils/apiClient';
 import { getOrCreateUserId } from '../utils/userIdentity';
 import { generateCompatibilityInsights } from '../utils/compatibilityInsights';
 import { generateAdvisorSummary } from './aiService';
@@ -58,17 +58,11 @@ export class AssessmentService {
         return false;
       }
 
-      const { count, error } = await supabase
-        .from('advisor_assessments')
-        .select('*', { count: 'exact', head: true })
-        .eq('advisor_email', normalizedEmail);
+      const { qualifiesForTrial, count } = await callApi<{ qualifiesForTrial: boolean; count: number }>(
+        `/api/assessments/trial-eligibility?advisorEmail=${encodeURIComponent(normalizedEmail)}`
+      );
 
-      if (error) {
-        console.error('Failed to evaluate trial eligibility:', error);
-        return false;
-      }
-
-      return (count ?? 0) === 0;
+      return qualifiesForTrial && (count ?? 0) === 0;
     } catch (error) {
       console.error('Unexpected error while evaluating trial eligibility:', error);
       return false;
@@ -189,23 +183,18 @@ export class AssessmentService {
       assessmentLink = generatedAssessmentLink;
 
       // Save to database first
-      const { error: dbError } = await supabase
-        .from('advisor_assessments')
-        .insert({
+      await callApi('/api/assessments/create', {
+        method: 'POST',
+        body: JSON.stringify({
           id: generatedAssessmentId,
-          advisor_email: canonicalAdvisorEmail,
-          advisor_name: canonicalAdvisorName,
-          client_email: clientEmail,
-          client_name: clientName,
-          status: 'sent',
-          assessment_link: generatedAssessmentLink,
-          is_trial: qualifiesForTrial
-        });
-
-      if (dbError) {
-        console.error('Failed to save assessment to database:', dbError);
-        throw new Error(`Failed to save assessment: ${dbError.message}`);
-      }
+          advisorEmail: canonicalAdvisorEmail,
+          advisorName: canonicalAdvisorName,
+          clientEmail,
+          clientName,
+          assessmentLink: generatedAssessmentLink,
+          isTrial: qualifiesForTrial,
+        }),
+      });
 
       // Also save to localStorage for backward compatibility
       const now = new Date();
@@ -268,12 +257,12 @@ export class AssessmentService {
         if (confirmationSent) {
           const confirmationTimestamp = new Date().toISOString();
 
-          const { error: confirmationUpdateError } = await supabase
-            .from('advisor_assessments')
-            .update({ confirmation_sent_at: confirmationTimestamp })
-            .eq('id', generatedAssessmentId);
-
-          if (confirmationUpdateError) {
+          try {
+            await callApi('/api/assessments/confirm', {
+              method: 'POST',
+              body: JSON.stringify({ assessmentId: generatedAssessmentId, confirmationSentAt: confirmationTimestamp }),
+            });
+          } catch (confirmationUpdateError) {
             console.error('Failed to record confirmation timestamp:', confirmationUpdateError);
           }
 
@@ -343,39 +332,23 @@ export class AssessmentService {
         advisorSummary = 'AI advisor summary could not be generated at this time.';
       }
       
-      const { error: dbError } = await supabase
-        .from('assessment_results')
-        .insert({
-          assessment_id: assessmentId,
-          advisor_email: assessment.advisor_email,
-          client_email: assessment.client_email,
-          client_name: assessment.client_name,
+      await callApi('/api/assessment-results/complete', {
+        method: 'POST',
+        body: JSON.stringify({
+          assessmentId,
+          advisorEmail: assessment.advisor_email,
+          clientEmail: assessment.client_email,
+          clientName: assessment.client_name,
           answers: assessmentAnswers,
           profile: results,
-          advisor_summary: advisorSummary,
-          is_unlocked: false
-        });
-
-      if (dbError) {
-        console.error('❌ Failed to save assessment results to database:', dbError);
-        throw new Error(`Failed to save results: ${dbError.message}`);
-      }
+          advisorSummary,
+        }),
+      });
 
       console.log('✅ Assessment results saved to database');
       
       // Update assessment status in database
-      const { error: updateError } = await supabase
-        .from('advisor_assessments')
-        .update({
-          status: 'completed',
-          completed_at: new Date().toISOString()
-        })
-        .eq('id', assessmentId);
-
-      if (updateError) {
-        console.error('❌ Failed to update assessment status:', updateError);
-        // Don't fail the whole operation for this
-      }
+      // Database status is updated within the API
 
       // Also update localStorage for backward compatibility
       const localAssessment = this.getAssessment(assessmentId);
@@ -472,18 +445,11 @@ export class AssessmentService {
 
   static async getUnlockedAssessmentResultsForAdvisor(advisorEmail: string): Promise<DatabaseAssessmentResult[]> {
     try {
-      const { data, error } = await supabase
-        .from('assessment_results')
-        .select('*')
-        .eq('advisor_email', advisorEmail)
-        .order('completed_at', { ascending: false });
+      const data = await callApi<DatabaseAssessmentResult[]>(
+        `/api/assessment-results/by-advisor?advisorEmail=${encodeURIComponent(advisorEmail)}`
+      );
 
-      if (error) {
-        console.error('Error fetching assessment results:', error);
-        return [];
-      }
-
-      return (data as DatabaseAssessmentResult[]) || [];
+      return data || [];
     } catch (error) {
       console.error('Error getting assessment results for advisor:', error);
       return [];
@@ -493,20 +459,11 @@ export class AssessmentService {
   // New method to get assessment from database
   static async getAssessmentFromDatabase(assessmentId: string): Promise<DatabaseAdvisorAssessment | null> {
     try {
-      const { data, error } = await supabase
-        .from('advisor_assessments')
-        .select(
-          'id, advisor_email, advisor_name, client_email, client_name, status, assessment_link, sent_at, completed_at, is_paid, paid_at, is_trial, confirmation_sent_at',
-        )
-        .eq('id', assessmentId)
-        .single();
+      const data = await callApi<DatabaseAdvisorAssessment>(
+        `/api/assessments/get?id=${encodeURIComponent(assessmentId)}`
+      );
 
-      if (error || !data) {
-        console.log('Assessment not found in database:', error);
-        return null;
-      }
-
-      return data as DatabaseAdvisorAssessment;
+      return data || null;
     } catch (error) {
       console.error('Error getting assessment from database:', error);
       return null;
@@ -515,27 +472,10 @@ export class AssessmentService {
 
   static async deleteAssessment(assessmentId: string): Promise<{ success: boolean; error?: string }> {
     try {
-      // Delete from database first - assessment results
-      const { error: resultsError } = await supabase
-        .from('assessment_results')
-        .delete()
-        .eq('assessment_id', assessmentId);
-
-      if (resultsError) {
-        console.error('Failed to delete assessment results:', resultsError);
-        // Don't fail completely if this doesn't exist
-      }
-
-      // Delete from database - advisor assessments
-      const { error: assessmentError } = await supabase
-        .from('advisor_assessments')
-        .delete()
-        .eq('id', assessmentId);
-
-      if (assessmentError) {
-        console.error('Failed to delete advisor assessment:', assessmentError);
-        // Don't fail completely if this doesn't exist
-      }
+      await callApi('/api/assessments/delete', {
+        method: 'POST',
+        body: JSON.stringify({ assessmentId }),
+      });
 
       // Delete from localStorage for backward compatibility
       const assessments = this.getAllAssessments();
@@ -572,103 +512,11 @@ export class AssessmentService {
         return [];
       }
 
-      const columns =
-        'id, advisor_email, advisor_name, client_email, client_name, status, assessment_link, sent_at, completed_at, is_paid, paid_at, is_trial, confirmation_sent_at';
+      const data = await callApi<DatabaseAdvisorAssessment[]>(
+        `/api/assessments/by-advisor?advisorEmail=${encodeURIComponent(normalizedEmail || '')}&advisorName=${encodeURIComponent(advisorName || '')}`
+      );
 
-      let typedData: DatabaseAdvisorAssessment[] = [];
-
-      if (normalizedEmail) {
-        const { data, error } = await supabase
-          .from('advisor_assessments')
-          .select(columns)
-          .eq('advisor_email', normalizedEmail)
-          .order('sent_at', { ascending: false });
-
-        if (error) {
-          console.error('Error fetching advisor assessments:', error);
-          return [];
-        }
-
-        typedData = (data as DatabaseAdvisorAssessment[]) || [];
-        if (typedData.length > 0 || !advisorName) {
-          return typedData;
-        }
-      }
-
-      if (!advisorName) {
-        return typedData;
-      }
-
-      // Handle legacy records that were created before advisor emails were stored correctly
-      const legacyRecords: DatabaseAdvisorAssessment[] = [];
-
-      const [{ data: nullEmailData, error: nullEmailError }, { data: blankEmailData, error: blankEmailError }] = await Promise.all([
-        supabase
-          .from('advisor_assessments')
-          .select(columns)
-          .is('advisor_email', null)
-          .eq('advisor_name', advisorName)
-          .order('sent_at', { ascending: false }),
-        supabase
-          .from('advisor_assessments')
-          .select(columns)
-          .eq('advisor_email', '')
-          .eq('advisor_name', advisorName)
-          .order('sent_at', { ascending: false }),
-      ]);
-
-      if (nullEmailError) {
-        console.error('Error fetching advisor assessments with null email:', nullEmailError);
-      }
-      if (blankEmailError) {
-        console.error('Error fetching advisor assessments with blank email:', blankEmailError);
-      }
-
-      if (nullEmailData) {
-        legacyRecords.push(...(nullEmailData as DatabaseAdvisorAssessment[]));
-      }
-      if (blankEmailData) {
-        legacyRecords.push(...(blankEmailData as DatabaseAdvisorAssessment[]));
-      }
-
-      if (legacyRecords.length === 0) {
-        return [];
-      }
-
-      legacyRecords.sort((a, b) => {
-        const sentA = a.sent_at ? new Date(a.sent_at).getTime() : 0;
-        const sentB = b.sent_at ? new Date(b.sent_at).getTime() : 0;
-        return sentB - sentA;
-      });
-
-      const legacyIds = legacyRecords.map(record => record.id);
-
-      if (!normalizedEmail) {
-        return legacyRecords;
-      }
-
-      const { error: updateError } = await supabase
-        .from('advisor_assessments')
-        .update({ advisor_email: normalizedEmail })
-        .in('id', legacyIds);
-
-      if (updateError) {
-        console.error('Failed to backfill advisor emails on assessments:', updateError);
-        return legacyRecords.map(record => ({ ...record, advisor_email: normalizedEmail }));
-      }
-
-      const { data: refetchedData, error: refetchError } = await supabase
-        .from('advisor_assessments')
-        .select(columns)
-        .eq('advisor_email', normalizedEmail)
-        .order('sent_at', { ascending: false });
-
-      if (refetchError) {
-        console.error('Error refetching advisor assessments after email backfill:', refetchError);
-        return legacyRecords.map(record => ({ ...record, advisor_email: normalizedEmail }));
-      }
-
-      return (refetchedData as DatabaseAdvisorAssessment[]) || [];
+      return data || [];
     } catch (error) {
       console.error('Error getting advisor assessments from database:', error);
       return [];
@@ -677,18 +525,11 @@ export class AssessmentService {
 
   static async getAssessmentResult(assessmentId: string): Promise<DatabaseAssessmentResult | null> {
     try {
-      const { data, error } = await supabase
-        .from('assessment_results')
-        .select('*')
-        .eq('assessment_id', assessmentId)
-        .single();
+      const data = await callApi<DatabaseAssessmentResult>(
+        `/api/assessment-results/get?assessmentId=${encodeURIComponent(assessmentId)}`
+      );
 
-      if (error) {
-        console.error('Error fetching assessment result:', error);
-        return null;
-      }
-
-      return data as DatabaseAssessmentResult;
+      return data || null;
     } catch (error) {
       console.error('Error getting assessment result:', error);
       return null;
@@ -697,16 +538,11 @@ export class AssessmentService {
 
   static async unlockAssessment(assessmentId: string): Promise<{ success: boolean; error?: string }> {
     try {
-      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-
-      if (sessionError || !session) {
-        return { success: false, error: 'Authentication required' };
-      }
-
-      const advisorEmail = session.user?.email;
+      const advisor = await AuthService.getCurrentAdvisor();
+      const advisorEmail = advisor?.email;
 
       if (!advisorEmail) {
-        return { success: false, error: 'Advisor email not found' };
+        return { success: false, error: 'Authentication required' };
       }
 
       // Check if this is a trial assessment
@@ -740,32 +576,10 @@ export class AssessmentService {
       const now = new Date().toISOString();
 
       // Update advisor_assessments table
-      const { error: assessmentError } = await supabase
-        .from('advisor_assessments')
-        .update({
-          is_paid: true,
-          paid_at: now
-        })
-        .eq('id', assessmentId);
-
-      if (assessmentError) {
-        console.error('Failed to update advisor_assessments:', assessmentError);
-        return { success: false, error: `Failed to update assessment: ${assessmentError.message}` };
-      }
-
-      // Update assessment_results table
-      const { error: resultError } = await supabase
-        .from('assessment_results')
-        .update({
-          is_unlocked: true,
-          unlocked_at: now
-        })
-        .eq('assessment_id', assessmentId);
-
-      if (resultError) {
-        console.error('Failed to update assessment_results:', resultError);
-        return { success: false, error: `Failed to update results: ${resultError.message}` };
-      }
+      await callApi('/api/assessment-results/unlock', {
+        method: 'POST',
+        body: JSON.stringify({ assessmentId }),
+      });
 
       console.log('✅ Assessment unlocked successfully:', assessmentId);
       return { success: true };

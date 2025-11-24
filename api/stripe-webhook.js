@@ -1,68 +1,11 @@
 import Stripe from 'stripe';
+import { query } from './_shared/db.js';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
   apiVersion: '2023-10-16',
 });
 
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-if (!SUPABASE_URL) {
-  console.error('SUPABASE_URL environment variable is not set');
-}
-
-if (!SUPABASE_SERVICE_ROLE_KEY) {
-  console.error('SUPABASE_SERVICE_ROLE_KEY environment variable is not set');
-}
-
-// Helper to create Supabase admin client (server-side only)
-function createSupabaseAdmin() {
-  return {
-    from: (table) => ({
-      update: (data) => ({
-        eq: async (column, value) => {
-          const response = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${column}=eq.${value}`, {
-            method: 'PATCH',
-            headers: {
-              'apikey': SUPABASE_SERVICE_ROLE_KEY,
-              'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-              'Content-Type': 'application/json',
-              'Prefer': 'return=minimal'
-            },
-            body: JSON.stringify(data)
-          });
-
-          if (!response.ok) {
-            const error = await response.text();
-            throw new Error(`Supabase update failed: ${error}`);
-          }
-
-          return { error: null };
-        }
-      }),
-      insert: async (data) => {
-        const response = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
-          method: 'POST',
-          headers: {
-            'apikey': SUPABASE_SERVICE_ROLE_KEY,
-            'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-            'Content-Type': 'application/json',
-            'Prefer': 'return=minimal'
-          },
-          body: JSON.stringify(data)
-        });
-
-        if (!response.ok) {
-          const error = await response.text();
-          throw new Error(`Supabase insert failed: ${error}`);
-        }
-
-        return { error: null };
-      }
-    })
-  };
-}
 
 export const config = {
   api: {
@@ -111,14 +54,6 @@ export default async function handler(req, res) {
 
   console.log('Received event:', event.type);
 
-  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-    console.error('Missing required environment variables');
-    res.status(500).json({ error: 'Server configuration error' });
-    return;
-  }
-
-  const supabase = createSupabaseAdmin();
-
   try {
     switch (event.type) {
       case 'checkout.session.completed': {
@@ -134,62 +69,42 @@ export default async function handler(req, res) {
           return;
         }
 
-        // Check if this is a trial assessment
-        const assessmentResponse = await fetch(`${SUPABASE_URL}/rest/v1/advisor_assessments?id=eq.${assessmentId}&select=is_trial`, {
-          headers: {
-            'apikey': SUPABASE_SERVICE_ROLE_KEY,
-            'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-            'Content-Type': 'application/json'
-          }
-        });
-
-        if (!assessmentResponse.ok) {
-          console.error('Failed to check trial status');
-        }
-
-        const assessmentData = await assessmentResponse.json();
-        const isTrial = assessmentData?.[0]?.is_trial || false;
-
+        const assessmentResult = await query(
+          'SELECT is_trial FROM advisor_assessments WHERE id = @assessmentId',
+          { assessmentId }
+        );
+        const isTrial = assessmentResult.recordset?.[0]?.is_trial || false;
         if (isTrial) {
           console.log('⚠️ Trial assessment should not require payment:', assessmentId);
         }
 
         const now = new Date().toISOString();
 
-        // Create or update stripe_orders record
-        const orderData = {
-          stripe_checkout_session_id: session.id,
-          stripe_customer_id: session.customer || 'guest',
-          email: advisorEmail,
-          amount: session.amount_total || 0,
-          currency: session.currency || 'usd',
-          status: 'completed',
-          stripe_payment_intent_id: session.payment_intent,
-          metadata: session.metadata || {},
-          updated_at: now
-        };
+        await query(
+          `INSERT INTO stripe_orders (stripe_checkout_session_id, stripe_customer_id, email, amount, currency, status, stripe_payment_intent_id, metadata, updated_at)
+           VALUES (@sessionId, @customerId, @advisorEmail, @amount, @currency, @status, @paymentIntent, @metadata, @updatedAt)`,
+          {
+            sessionId: session.id,
+            customerId: session.customer || 'guest',
+            advisorEmail,
+            amount: session.amount_total || 0,
+            currency: session.currency || 'usd',
+            status: 'completed',
+            paymentIntent: session.payment_intent,
+            metadata: JSON.stringify(session.metadata || {}),
+            updatedAt: now,
+          }
+        );
 
-        await supabase.from('stripe_orders').insert(orderData);
+        await query(
+          `UPDATE assessment_results SET is_unlocked = 1, unlocked_at = @now, checkout_session_id = @sessionId WHERE assessment_id = @assessmentId`,
+          { now, sessionId: session.id, assessmentId }
+        );
 
-        // Unlock the assessment result
-        await supabase
-          .from('assessment_results')
-          .update({
-            is_unlocked: true,
-            unlocked_at: now,
-            checkout_session_id: session.id
-          })
-          .eq('assessment_id', assessmentId);
-
-        // Mark the advisor assessment as paid
-        await supabase
-          .from('advisor_assessments')
-          .update({
-            is_paid: true,
-            paid_at: now,
-            last_checkout_session_id: session.id
-          })
-          .eq('id', assessmentId);
+        await query(
+          `UPDATE advisor_assessments SET is_paid = 1, paid_at = @now, last_checkout_session_id = @sessionId WHERE id = @assessmentId`,
+          { now, sessionId: session.id, assessmentId }
+        );
 
         console.log('Successfully unlocked assessment:', assessmentId);
         break;
@@ -199,11 +114,10 @@ export default async function handler(req, res) {
         const session = event.data.object;
         console.log('Checkout session expired:', session.id);
 
-        // Update order status to expired if it exists
-        await supabase
-          .from('stripe_orders')
-          .update({ status: 'expired', updated_at: new Date().toISOString() })
-          .eq('stripe_checkout_session_id', session.id);
+        await query(
+          'UPDATE stripe_orders SET status = @status, updated_at = @updatedAt WHERE stripe_checkout_session_id = @sessionId',
+          { status: 'expired', updatedAt: new Date().toISOString(), sessionId: session.id }
+        );
 
         break;
       }
@@ -212,11 +126,10 @@ export default async function handler(req, res) {
         const paymentIntent = event.data.object;
         console.log('Payment failed:', paymentIntent.id);
 
-        // Update order status to failed
-        await supabase
-          .from('stripe_orders')
-          .update({ status: 'failed', updated_at: new Date().toISOString() })
-          .eq('stripe_payment_intent_id', paymentIntent.id);
+        await query(
+          'UPDATE stripe_orders SET status = @status, updated_at = @updatedAt WHERE stripe_payment_intent_id = @paymentIntentId',
+          { status: 'failed', updatedAt: new Date().toISOString(), paymentIntentId: paymentIntent.id }
+        );
 
         break;
       }
