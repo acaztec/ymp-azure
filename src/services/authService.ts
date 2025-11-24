@@ -155,6 +155,15 @@ export class AuthService {
     const advisor = this.getStoredAdvisorProfile()
     const user = advisor ? { id: advisor.user_id, email: advisor.email } : null
     callback('INITIAL', { user })
-    return { data: null, error: null }
+    return {
+      data: {
+        subscription: {
+          unsubscribe: () => {
+            // No-op for local auth implementation
+          }
+        }
+      },
+      error: null
+    }
   }
 }
