@@ -9,15 +9,17 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.57.4",
+    "@azure/identity": "^4.0.0",
     "@types/react-router-dom": "^5.3.3",
     "dompurify": "^3.1.7",
     "lucide-react": "^0.294.0",
     "marked": "^12.0.2",
+    "mssql": "^10.0.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-router-dom": "^6.8.1",
-    "stripe": "^19.0.0"
+    "stripe": "^19.0.0",
+    "uuid": "^9.0.1"
   },
   "devDependencies": {
     "@types/dompurify": "^3.0.5",
