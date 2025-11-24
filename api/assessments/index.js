@@ -28,7 +28,7 @@ export default async function (context, req) {
     }
   } catch (error) {
     context.log.error('Assessments function error', error);
-    context.res = { status: 500, jsonBody: { error: error?.message || 'Internal server error' } };
+    context.res = { status: 500, body: { error: error?.message || 'Internal server error' } };
   }
 }
 
