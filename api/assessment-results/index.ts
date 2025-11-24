@@ -23,7 +23,7 @@ const assessmentResultsFunction: AzureFunction = async function (context: Contex
     }
   } catch (error: any) {
     context.log.error('Assessment results function error', error);
-    context.res = { status: 500, jsonBody: { error: error?.message || 'Internal server error' } };
+    context.res = { status: 500, body: { error: error?.message || 'Internal server error' } };
   }
 };
 

@@ -1,15 +1,9 @@
-import { ClientSecretCredential } from '@azure/identity';
-import sql from 'mssql';
+import { ClientSecretCredential } from "@azure/identity";
+import sql, { ConnectionPool } from "mssql";
 
-const requiredEnvVars = [
-  'AZURE_TENANT_ID',
-  'AZURE_CLIENT_ID',
-  'AZURE_CLIENT_SECRET',
-  'SQL_SERVER_HOST',
-  'SQL_DATABASE_NAME',
-] as const;
+let cachedPool: ConnectionPool | null = null;
 
-function getEnv(name: typeof requiredEnvVars[number]): string {
+function getEnv(name: string): string {
   const value = process.env[name];
   if (!value) {
     throw new Error(`Missing required environment variable: ${name}`);
@@ -17,68 +11,56 @@ function getEnv(name: typeof requiredEnvVars[number]): string {
   return value;
 }
 
-let pool: sql.ConnectionPool | null = null;
-
 async function getAccessToken(): Promise<string> {
-  const tenantId = getEnv('AZURE_TENANT_ID');
-  const clientId = getEnv('AZURE_CLIENT_ID');
-  const clientSecret = getEnv('AZURE_CLIENT_SECRET');
+  const tenantId = getEnv("AZURE_TENANT_ID");
+  const clientId = getEnv("AZURE_CLIENT_ID");
+  const clientSecret = getEnv("AZURE_CLIENT_SECRET");
 
   const credential = new ClientSecretCredential(tenantId, clientId, clientSecret);
-  const { token } = await credential.getToken('https://database.windows.net/.default');
-  if (!token) {
-    throw new Error('Failed to acquire Azure SQL access token');
+  const tokenResponse = await credential.getToken("https://database.windows.net/.default");
+  if (!tokenResponse?.token) {
+    throw new Error("Failed to acquire access token for Azure SQL.");
   }
-  return token;
+
+  return tokenResponse.token;
 }
 
-export async function getSqlPool(): Promise<sql.ConnectionPool> {
-  if (pool && pool.connected) {
-    return pool;
+export async function getSqlPool(): Promise<ConnectionPool> {
+  if (cachedPool && cachedPool.connected) {
+    return cachedPool;
   }
 
-  const server = getEnv('SQL_SERVER_HOST');
-  const database = getEnv('SQL_DATABASE_NAME');
+  const server = getEnv("SQL_SERVER_HOST");
+  const database = getEnv("SQL_DATABASE_NAME");
   const token = await getAccessToken();
 
-  pool = await sql.connect({
+  const config: sql.config = {
     server,
     database,
-    options: { encrypt: true },
-    authentication: {
-      type: 'azure-active-directory-access-token',
-      options: { token },
+    options: {
+      encrypt: true,
     },
-  });
+    authentication: {
+      type: "azure-active-directory-access-token",
+      options: {
+        token,
+      },
+    },
+  } as any;
 
-  return pool;
+  cachedPool = await sql.connect(config);
+  return cachedPool;
 }
 
-function getSqlType(value: any): sql.ISqlType | undefined {
-  if (value === null || value === undefined) return undefined;
-  if (typeof value === 'number') {
-    return Number.isInteger(value) ? sql.Int : sql.Float;
-  }
-  if (typeof value === 'boolean') {
-    return sql.Bit;
-  }
-  if (value instanceof Date) {
-    return sql.DateTime2;
-  }
-  return sql.NVarChar;
-}
-
-export async function query<T = any>(sqlText: string, params: Record<string, any> = {}): Promise<sql.IResult<T>> {
+export async function query<T = any>(
+  sqlText: string,
+  params: Record<string, any> = {}
+): Promise<sql.IResult<T>> {
   const pool = await getSqlPool();
   const request = pool.request();
 
   for (const [name, value] of Object.entries(params)) {
-    const type = getSqlType(value);
-    if (type) {
-      request.input(name, type, value);
-    } else {
-      request.input(name, value);
-    }
+    request.input(name, value);
   }
 
   return request.query<T>(sqlText);
