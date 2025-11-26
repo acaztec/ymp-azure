@@ -5,6 +5,13 @@ const assessmentResultsFunction: AzureFunction = async function (context: Contex
   const action = context.bindingData.action as string | undefined;
 
   try {
+    context.log('Assessment results function invoked', {
+      action,
+      method: req.method,
+      query: req.query,
+      hasBody: !!req.body,
+    });
+
     switch (action) {
       case 'complete':
         await handleComplete(context, req);
@@ -22,7 +29,13 @@ const assessmentResultsFunction: AzureFunction = async function (context: Contex
         context.res = { status: 400, jsonBody: { error: 'Unknown action' } };
     }
   } catch (error: any) {
-    context.log.error('Assessment results function error', error);
+    context.log.error('Assessment results function error', {
+      error,
+      action,
+      method: req.method,
+      query: req.query,
+      hasBody: !!req.body,
+    });
     context.res = {
       status: 500,
       jsonBody: {
@@ -42,6 +55,16 @@ async function handleComplete(context: Context, req: HttpRequest) {
     return;
   }
 
+  context.log('Completing assessment results', {
+    assessmentId,
+    advisorEmail,
+    clientEmail,
+    clientName,
+    hasAnswers: !!answers,
+    hasProfile: !!profile,
+    hasAdvisorSummary: !!advisorSummary,
+  });
+
   const insertResult = await query(
     `INSERT INTO assessment_results (assessment_id, advisor_email, client_email, client_name, answers, profile, advisor_summary, is_unlocked)
      OUTPUT INSERTED.*
@@ -57,6 +80,7 @@ async function handleComplete(context: Context, req: HttpRequest) {
     }
   );
 
+  context.log('Marking assessment as completed', { assessmentId });
   await query(
     'UPDATE advisor_assessments SET status = @status, completed_at = GETUTCDATE() WHERE id = @assessmentId',
     { status: 'completed', assessmentId }
@@ -72,6 +96,7 @@ async function handleByAdvisor(context: Context, req: HttpRequest) {
     return;
   }
 
+  context.log('Fetching assessment results by advisor', { advisorEmail });
   const result = await query(
     'SELECT * FROM assessment_results WHERE LOWER(advisor_email) = LOWER(@advisorEmail) ORDER BY completed_at DESC',
     { advisorEmail }
@@ -86,6 +111,7 @@ async function handleGet(context: Context, req: HttpRequest) {
     return;
   }
 
+  context.log('Fetching assessment result by id', { assessmentId });
   const result = await query('SELECT * FROM assessment_results WHERE assessment_id = @assessmentId', { assessmentId });
   const record = result.recordset[0];
   if (!record) {
@@ -103,6 +129,7 @@ async function handleUnlock(context: Context, req: HttpRequest) {
   }
 
   const timestamp = new Date().toISOString();
+  context.log('Unlocking assessment result', { assessmentId, timestamp });
   await query('UPDATE advisor_assessments SET is_paid = 1, paid_at = @timestamp WHERE id = @assessmentId', {
     assessmentId,
     timestamp,

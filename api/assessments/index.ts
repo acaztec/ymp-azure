@@ -5,6 +5,13 @@ const assessmentsFunction: AzureFunction = async function (context: Context, req
   const action = context.bindingData.action as string | undefined;
 
   try {
+    context.log('Assessments function invoked', {
+      action,
+      method: req.method,
+      query: req.query,
+      hasBody: !!req.body,
+    });
+
     switch (action) {
       case 'trial-eligibility':
         await handleTrialEligibility(context, req);
@@ -28,7 +35,13 @@ const assessmentsFunction: AzureFunction = async function (context: Context, req
         context.res = { status: 400, jsonBody: { error: 'Unknown action' } };
     }
   } catch (error: any) {
-    context.log.error('Assessments function error', error);
+    context.log.error('Assessments function error', {
+      error,
+      action,
+      method: req.method,
+      query: req.query,
+      hasBody: !!req.body,
+    });
     context.res = {
       status: 500,
       jsonBody: {
@@ -46,6 +59,7 @@ async function handleTrialEligibility(context: Context, req: HttpRequest) {
     return;
   }
 
+  context.log('Checking trial eligibility', { advisorEmail });
   const result = await query<{ count: number }>(
     'SELECT COUNT(*) as count FROM advisor_assessments WHERE LOWER(advisor_email) = LOWER(@advisorEmail)',
     { advisorEmail }
@@ -63,6 +77,16 @@ async function handleCreate(context: Context, req: HttpRequest) {
     context.res = { status: 400, jsonBody: { error: 'Missing required fields' } };
     return;
   }
+
+  context.log('Creating assessment', {
+    id,
+    advisorEmail,
+    advisorName,
+    clientEmail,
+    clientName,
+    assessmentLink,
+    isTrial: !!isTrial,
+  });
 
   const result = await query(
     `INSERT INTO advisor_assessments (id, advisor_email, advisor_name, client_email, client_name, status, assessment_link, is_trial, sent_at)
@@ -90,6 +114,7 @@ async function handleConfirm(context: Context, req: HttpRequest) {
   }
 
   const timestamp = confirmationSentAt || new Date().toISOString();
+  context.log('Confirming assessment', { assessmentId, confirmationSentAt, timestamp });
   await query(
     'UPDATE advisor_assessments SET confirmation_sent_at = @timestamp WHERE id = @assessmentId',
     { assessmentId, timestamp }
@@ -105,6 +130,7 @@ async function handleGet(context: Context, req: HttpRequest) {
     return;
   }
 
+  context.log('Fetching assessment by id', { id });
   const result = await query('SELECT * FROM advisor_assessments WHERE id = @id', { id });
   const record = result.recordset[0];
   if (!record) {
@@ -121,6 +147,7 @@ async function handleDelete(context: Context, req: HttpRequest) {
     return;
   }
 
+  context.log('Deleting assessment and results', { assessmentId });
   await query('DELETE FROM assessment_results WHERE assessment_id = @assessmentId', { assessmentId });
   await query('DELETE FROM advisor_assessments WHERE id = @assessmentId', { assessmentId });
 
@@ -135,6 +162,7 @@ async function handleList(context: Context, req: HttpRequest) {
     return;
   }
 
+  context.log('Listing assessments for advisor', { advisorEmail, advisorName });
   let sqlText = 'SELECT * FROM advisor_assessments';
   const params: Record<string, any> = {};
   if (advisorEmail) {
