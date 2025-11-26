@@ -34,6 +34,7 @@ export async function getSqlPool(): Promise<ConnectionPool> {
   const database = getEnv("SQL_DATABASE_NAME");
   const token = await getAccessToken();
 
+  console.log("Creating new SQL connection pool", { server, database });
   const config: sql.config = {
     server,
     database,
@@ -63,5 +64,17 @@ export async function query<T = any>(
     request.input(name, value);
   }
 
-  return request.query<T>(sqlText);
+  console.log("Executing SQL query", { sqlText, params });
+
+  try {
+    const result = await request.query<T>(sqlText);
+    console.log("SQL query completed", {
+      rowCount: result.recordset?.length,
+      rowsAffected: result.rowsAffected,
+    });
+    return result;
+  } catch (error) {
+    console.error("SQL query failed", { sqlText, params, error });
+    throw error;
+  }
 }
