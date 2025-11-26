@@ -11,6 +11,10 @@ function getEnv(name) {
   return value;
 }
 
+function getEnvOptional(name) {
+  return process.env[name];
+}
+
 async function getAccessToken() {
   const tenantId = getEnv("AZURE_TENANT_ID");
   const clientId = getEnv("AZURE_CLIENT_ID");
@@ -25,9 +29,12 @@ async function getAccessToken() {
   return tokenResponse.token;
 }
 
-export async function getSqlPool() {
-  if (cachedPool && cachedPool.connected) {
-    return cachedPool;
+async function createPool() {
+  const connectionString =
+    getEnvOptional("SQL_CONNECTION_STRING") || getEnvOptional("AZURE_SQL_CONNECTION_STRING");
+
+  if (connectionString) {
+    return sql.connect(connectionString);
   }
 
   const server = getEnv("SQL_SERVER_HOST");
@@ -48,7 +55,15 @@ export async function getSqlPool() {
     },
   };
 
-  cachedPool = await sql.connect(config);
+  return sql.connect(config);
+}
+
+export async function getSqlPool() {
+  if (cachedPool && cachedPool.connected) {
+    return cachedPool;
+  }
+
+  cachedPool = await createPool();
   return cachedPool;
 }
 
