@@ -141,6 +141,9 @@ export default async function handler(req, res) {
     res.status(200).json({ received: true });
   } catch (error) {
     console.error('Error processing webhook:', error);
-    res.status(500).json({ error: 'Webhook processing failed' });
+    res.status(500).json({
+      error: 'Webhook processing failed',
+      message: error?.message || 'Unexpected error occurred while processing webhook',
+    });
   }
 }
