@@ -22,7 +22,7 @@ jobs:
           node-version: '20.x'   # or match your App Service runtime
 
       - name: Install dependencies
-        run: npm ci
+        run: npm install
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
@@ -64,3 +64,4 @@ jobs:
           slot-name: 'Production'
           package: .
           publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_5A41CB6520044CC69E8D2301D096FAB5 }}
+
