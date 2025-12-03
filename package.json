@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "start": "node server.mjs"
   },
   "dependencies": {
     "@azure/identity": "^4.0.0",
@@ -19,7 +20,8 @@
     "react-dom": "^18.2.0",
     "react-router-dom": "^6.8.1",
     "stripe": "^19.0.0",
-    "uuid": "^9.0.1"
+    "uuid": "^9.0.1",
+    "express": "^4.19.0"
   },
   "devDependencies": {
     "@types/dompurify": "^3.0.5",
