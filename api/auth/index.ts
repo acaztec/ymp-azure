@@ -4,6 +4,7 @@ import { query } from '../_shared/db';
 
 interface AdvisorUserRecord {
   id: string;
+  user_id: string;
   email: string;
   password_hash: string;
   name: string;
@@ -38,7 +39,7 @@ function verifyPassword(password: string, storedHash: string) {
 function mapAdvisor(record: AdvisorUserRecord) {
   return {
     id: record.id,
-    user_id: record.id,
+    user_id: record.user_id || record.id,
     email: record.email,
     name: record.name,
     company: record.company ?? null,
@@ -48,23 +49,24 @@ function mapAdvisor(record: AdvisorUserRecord) {
 
 async function ensureUserTable() {
   await query(`
-    IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[advisor_users]') AND type in (N'U'))
+    IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[advisor_profiles]') AND type in (N'U'))
     BEGIN
-      CREATE TABLE [dbo].[advisor_users](
+      CREATE TABLE [dbo].[advisor_profiles](
         [id] UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID(),
+        [user_id] UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID(),
         [email] NVARCHAR(255) NOT NULL UNIQUE,
         [password_hash] NVARCHAR(512) NOT NULL,
         [name] NVARCHAR(255) NOT NULL,
         [company] NVARCHAR(255) NULL,
         [created_at] DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
         [updated_at] DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
-        CONSTRAINT [PK_advisor_users] PRIMARY KEY CLUSTERED ([id] ASC)
+        CONSTRAINT [PK_advisor_profiles] PRIMARY KEY CLUSTERED ([id] ASC)
       );
     END;
 
-    IF NOT EXISTS (SELECT name FROM sys.indexes WHERE name = 'IX_advisor_users_email')
+    IF NOT EXISTS (SELECT name FROM sys.indexes WHERE name = 'IX_advisor_profiles_email')
     BEGIN
-      CREATE UNIQUE INDEX [IX_advisor_users_email] ON [dbo].[advisor_users]([email]);
+      CREATE UNIQUE INDEX [IX_advisor_profiles_email] ON [dbo].[advisor_profiles]([email]);
     END;
   `);
 }
@@ -115,7 +117,7 @@ async function handleSignup(context: Context, req: HttpRequest) {
   }
 
   const existing = await query<AdvisorUserRecord>(
-    'SELECT TOP 1 * FROM advisor_users WHERE LOWER(email) = LOWER(@email)',
+    'SELECT TOP 1 * FROM advisor_profiles WHERE LOWER(email) = LOWER(@email)',
     { email: normalizedEmail }
   );
 
@@ -127,7 +129,7 @@ async function handleSignup(context: Context, req: HttpRequest) {
   const passwordHash = hashPassword(password);
 
   const insertResult = await query<AdvisorUserRecord>(
-    `INSERT INTO advisor_users (email, password_hash, name, company)
+    `INSERT INTO advisor_profiles (email, password_hash, name, company)
      OUTPUT INSERTED.*
      VALUES (@email, @password_hash, @name, @company)`,
     { email: normalizedEmail, password_hash: passwordHash, name, company: company || null }
@@ -147,7 +149,7 @@ async function handleLogin(context: Context, req: HttpRequest) {
   }
 
   const result = await query<AdvisorUserRecord>(
-    'SELECT TOP 1 * FROM advisor_users WHERE LOWER(email) = LOWER(@email)',
+    'SELECT TOP 1 * FROM advisor_profiles WHERE LOWER(email) = LOWER(@email)',
     { email: normalizedEmail }
   );
 
@@ -170,7 +172,7 @@ async function handleProfile(context: Context, req: HttpRequest) {
     return;
   }
 
-  let sqlText = 'SELECT TOP 1 * FROM advisor_users WHERE 1=1';
+  let sqlText = 'SELECT TOP 1 * FROM advisor_profiles WHERE 1=1';
   const params: Record<string, any> = {};
   if (userId) {
     sqlText += ' AND id = @id';
