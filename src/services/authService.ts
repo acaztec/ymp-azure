@@ -105,13 +105,17 @@ export class AuthService {
     error?: string
   }> {
     try {
-      const response = await callApi<{ advisor: Advisor }>('/api/auth/login', {
+      const response = await callApi<{ advisor?: Advisor }>('/api/auth/login', {
         method: 'POST',
         body: JSON.stringify({
           email: credentials.email?.trim().toLowerCase(),
           password: credentials.password,
         })
       })
+
+      if (!response?.advisor) {
+        throw new Error('Login response did not include an advisor profile.')
+      }
 
       const advisor = this.normalizeAdvisor(response.advisor)
       this.storeAdvisorProfile(advisor)
@@ -128,7 +132,7 @@ export class AuthService {
     error?: string
   }> {
     try {
-      const response = await callApi<{ advisor: Advisor }>('/api/auth/signup', {
+      const response = await callApi<{ advisor?: Advisor }>('/api/auth/signup', {
         method: 'POST',
         body: JSON.stringify({
           email: data.email?.trim().toLowerCase(),
@@ -137,6 +141,10 @@ export class AuthService {
           company: data.company,
         })
       })
+
+      if (!response?.advisor) {
+        throw new Error('Signup response did not include an advisor profile.')
+      }
 
       const advisor = this.normalizeAdvisor(response.advisor)
       this.storeAdvisorProfile(advisor)
