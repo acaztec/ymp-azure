@@ -6,6 +6,7 @@ let cachedPool: ConnectionPool | null = null;
 function getEnv(name: string): string {
   const value = process.env[name];
   if (!value) {
+    console.error(`Missing required environment variable: ${name}`);
     throw new Error(`Missing required environment variable: ${name}`);
   }
   return value;
