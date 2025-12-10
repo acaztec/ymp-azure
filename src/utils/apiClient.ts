@@ -7,11 +7,13 @@ export async function callApi<T = any>(path: string, options: RequestInit = {}):
     ...options,
   });
 
+  const rawText = await response.text();
   let body: any = null;
+
   try {
-    body = await response.json();
+    body = rawText ? JSON.parse(rawText) : null;
   } catch {
-    body = null;
+    throw new Error('Received an unexpected response from the server. Please try again.');
   }
 
   if (!response.ok) {
