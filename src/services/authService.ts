@@ -1,6 +1,7 @@
-import { v4 as uuid } from 'uuid'
+import { callApi } from '../utils/apiClient'
 
 const ADVISOR_STORAGE_KEY = 'advisor_profile'
+const ADVISOR_SESSION_KEY = 'advisor_session'
 
 export interface Advisor {
   id: string
@@ -24,13 +25,41 @@ export interface SignupData {
 }
 
 export class AuthService {
+  private static normalizeAdvisor(advisor: Advisor): Advisor {
+    const normalizedEmail = advisor.email?.trim().toLowerCase() || advisor.email
+    return {
+      ...advisor,
+      email: normalizedEmail,
+      user_id: advisor.user_id || advisor.id,
+    }
+  }
+
+  private static storeSession(user: { id: string; email: string }) {
+    try {
+      localStorage.setItem(ADVISOR_SESSION_KEY, JSON.stringify(user))
+    } catch (err) {
+      console.error('Failed to store session:', err)
+    }
+  }
+
+  private static getStoredSession(): { id: string; email: string } | null {
+    try {
+      const data = localStorage.getItem(ADVISOR_SESSION_KEY)
+      if (!data) return null
+      const parsed = JSON.parse(data)
+      return parsed?.id && parsed?.email ? parsed : null
+    } catch {
+      return null
+    }
+  }
+
   static storeAdvisorProfile(advisor: Advisor) {
     try {
-      const sanitizedAdvisor: Advisor = {
-        ...advisor,
-        email: advisor.email?.trim().toLowerCase() || advisor.email,
-      }
+      const sanitizedAdvisor = this.normalizeAdvisor(advisor)
       localStorage.setItem(ADVISOR_STORAGE_KEY, JSON.stringify(sanitizedAdvisor))
+      if (sanitizedAdvisor?.user_id && sanitizedAdvisor?.email) {
+        this.storeSession({ id: sanitizedAdvisor.user_id, email: sanitizedAdvisor.email })
+      }
     } catch (err) {
       console.error('Failed to store advisor profile:', err)
     }
@@ -64,6 +93,7 @@ export class AuthService {
   static clearStoredAdvisorProfile() {
     try {
       localStorage.removeItem(ADVISOR_STORAGE_KEY)
+      localStorage.removeItem(ADVISOR_SESSION_KEY)
     } catch {
       // ignore
     }
@@ -74,14 +104,22 @@ export class AuthService {
     advisor?: Advisor
     error?: string
   }> {
-    const stored = this.getStoredAdvisorProfile()
-    const email = credentials.email?.trim().toLowerCase()
+    try {
+      const response = await callApi<{ advisor: Advisor }>('/api/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({
+          email: credentials.email?.trim().toLowerCase(),
+          password: credentials.password,
+        })
+      })
 
-    if (stored && stored.email === email) {
-      return { success: true, advisor: stored }
+      const advisor = this.normalizeAdvisor(response.advisor)
+      this.storeAdvisorProfile(advisor)
+
+      return { success: true, advisor }
+    } catch (error: any) {
+      return { success: false, error: error?.message || 'Failed to log in' }
     }
-
-    return { success: false, error: 'Account not found. Please sign up first.' }
   }
 
   static async signup(data: SignupData): Promise<{
@@ -89,18 +127,23 @@ export class AuthService {
     advisor?: Advisor
     error?: string
   }> {
-    const now = new Date().toISOString()
-    const advisor: Advisor = {
-      id: uuid(),
-      user_id: uuid(),
-      email: data.email.trim().toLowerCase(),
-      name: data.name,
-      company: data.company || null,
-      created_at: now,
-    }
+    try {
+      const response = await callApi<{ advisor: Advisor }>('/api/auth/signup', {
+        method: 'POST',
+        body: JSON.stringify({
+          email: data.email?.trim().toLowerCase(),
+          password: data.password,
+          name: data.name,
+          company: data.company,
+        })
+      })
 
-    this.storeAdvisorProfile(advisor)
-    return { success: true, advisor }
+      const advisor = this.normalizeAdvisor(response.advisor)
+      this.storeAdvisorProfile(advisor)
+      return { success: true, advisor }
+    } catch (error: any) {
+      return { success: false, error: error?.message || 'Failed to sign up' }
+    }
   }
 
   static async resendConfirmationEmail(_email: string): Promise<{
@@ -115,9 +158,17 @@ export class AuthService {
   }
 
   static async getCurrentUser(): Promise<{ id: string; email: string } | null> {
+    const session = this.getStoredSession()
+    if (session?.id && session?.email) {
+      return session
+    }
+
     const advisor = this.getStoredAdvisorProfile()
-    if (!advisor) return null
-    return { id: advisor.user_id, email: advisor.email }
+    if (!advisor?.user_id || !advisor?.email) return null
+
+    const normalizedAdvisor = this.normalizeAdvisor(advisor)
+    this.storeAdvisorProfile(normalizedAdvisor)
+    return { id: normalizedAdvisor.user_id, email: normalizedAdvisor.email }
   }
 
   static async getSession() {
@@ -128,7 +179,19 @@ export class AuthService {
   static async getCurrentAdvisor(): Promise<Advisor | null> {
     try {
       const advisor = this.getStoredAdvisorProfile()
-      return advisor || null
+      if (advisor) {
+        const normalized = this.normalizeAdvisor(advisor)
+        this.storeAdvisorProfile(normalized)
+        return normalized
+      }
+
+      const session = this.getStoredSession()
+      if (session?.id) {
+        const profile = await this.getAdvisorProfile(session.id)
+        return profile ? this.normalizeAdvisor(profile) : null
+      }
+
+      return null
     } catch (error) {
       console.error('Error getting current advisor:', error)
       return null
@@ -141,19 +204,37 @@ export class AuthService {
   }
 
   static async getAdvisorProfile(_userId: string): Promise<Advisor | null> {
-    return this.getStoredAdvisorProfile()
+    if (!_userId) return null
+
+    try {
+      const response = await callApi<{ advisor: Advisor }>(`/api/auth/profile?userId=${encodeURIComponent(_userId)}`)
+      return this.normalizeAdvisor(response.advisor)
+    } catch (error) {
+      console.error('Error fetching advisor profile:', error)
+      return null
+    }
   }
 
   static async getAdvisorById(advisorId: string): Promise<Advisor | null> {
+    if (!advisorId) return null
+
     const advisor = this.getStoredAdvisorProfile()
-    if (advisor && advisor.id === advisorId) return advisor
-    return null
+    if (advisor && advisor.id === advisorId) return this.normalizeAdvisor(advisor)
+
+    try {
+      const profile = await this.getAdvisorProfile(advisorId)
+      return profile ? this.normalizeAdvisor(profile) : null
+    } catch (error) {
+      console.error('Error fetching advisor by id:', error)
+      return null
+    }
   }
 
   // Listen to auth state changes
   static onAuthStateChange(callback: (event: any, session: any) => void) {
+    const session = this.getStoredSession()
     const advisor = this.getStoredAdvisorProfile()
-    const user = advisor ? { id: advisor.user_id, email: advisor.email } : null
+    const user = session || (advisor ? { id: advisor.user_id, email: advisor.email } : null)
     callback('INITIAL', { user })
     return {
       data: {
