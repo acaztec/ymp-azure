@@ -8,11 +8,26 @@ const databasePingFunction: AzureFunction = async function (context: Context, re
   });
 
   try {
+    if (req.method === "OPTIONS") {
+      context.res = {
+        status: 204,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET,HEAD,OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type",
+        },
+      };
+      return;
+    }
+
     const result = await query<{ currentTime: Date }>("SELECT GETDATE() AS currentTime");
     const currentTime = result.recordset?.[0]?.currentTime;
 
     context.res = {
       status: 200,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+      },
       jsonBody: {
         ok: true,
         currentTime,
@@ -32,6 +47,9 @@ const databasePingFunction: AzureFunction = async function (context: Context, re
 
     context.res = {
       status: 500,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+      },
       jsonBody: {
         ok: false,
         error: "Database ping failed",
