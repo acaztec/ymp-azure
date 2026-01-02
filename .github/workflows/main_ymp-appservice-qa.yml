@@ -35,6 +35,9 @@ jobs:
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
           VITE_STRIPE_PUBLISHABLE_KEY: ${{ secrets.VITE_STRIPE_PUBLISHABLE_KEY }}
 
+      - name: Prune to production dependencies
+        run: npm prune --omit=dev
+
       - name: Upload artifact for deployment job
         uses: actions/upload-artifact@v4
         with:
@@ -44,6 +47,8 @@ jobs:
             package.json
             package-lock.json
             dist
+            api-dist
+            node_modules
             server.mjs
 
   deploy:
