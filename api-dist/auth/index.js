@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { query } from '../_shared/db';
+import { query } from '../_shared/db.js';
 function normalizeEmail(email) {
     return email?.trim().toLowerCase();
 }

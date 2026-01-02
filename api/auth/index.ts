@@ -1,6 +1,6 @@
 import type { AzureFunction, Context, HttpRequest } from '@azure/functions';
 import crypto from 'crypto';
-import { query } from '../_shared/db';
+import { query } from '../_shared/db.js';
 
 interface AdvisorUserRecord {
   id: string;
