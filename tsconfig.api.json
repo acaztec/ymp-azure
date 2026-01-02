@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ES2020",
+    "moduleResolution": "node",
+    "outDir": "api-dist",
+    "rootDir": "api",
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "allowSyntheticDefaultImports": true,
+    "allowJs": true,
+    "isolatedModules": false,
+    "strict": true,
+    "skipLibCheck": true,
+    "typeRoots": ["./api/types", "./node_modules/@types"],
+    "types": ["node"]
+  },
+  "include": ["api/**/*"]
+}

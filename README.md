@@ -28,23 +28,15 @@ needing SendGrid templates unless you prefer to manage them there.
 
 ## API routing configuration
 
-The frontend expects JSON from Azure Functions under `/api/*`. When the static
-server handles `/api` paths, it falls back to `index.html` and returns HTML
-instead of hitting the functions. To ensure API calls reach Azure Functions:
+The web app and API now run within the same Azure App Service instance. Requests
+to `/api/*` are handled directly by the Node server rather than being proxied to
+an external Functions host. No additional proxy configuration is required.
 
-- Deploy the frontend with `VITE_API_BASE_URL` set to the Azure Function base
-  URL. For your environment, use
-  `https://ymp-appservice-qa-bpfzhrang8ffgkdf.centralus-01.azurewebsites.net`.
-- When running the bundled static server (`npm start`) or hosting the built
-  files elsewhere, set `API_PROXY_TARGET` to the same URL. The server will
-  proxy `/api/*` requests to that target and return JSON responses (or emit a
-  502 error if the proxy target is missing or unreachable).
+- Keep `VITE_API_BASE_URL` empty (default) to call the co-located API over the
+  same origin.
+- `npm run build` now builds both the frontend and the API (TypeScript sources
+  compile into `api-dist/`). Use `npm start` to serve the compiled assets and
+  API from a single Node process.
 
-Example `.env` snippet (no trailing slash):
-
-```
-VITE_API_BASE_URL=https://ymp-appservice-qa-bpfzhrang8ffgkdf.centralus-01.azurewebsites.net
-API_PROXY_TARGET=https://ymp-appservice-qa-bpfzhrang8ffgkdf.centralus-01.azurewebsites.net
-```
-
-No SQL changes are required for this routing fix; the backend remains the same.
+No SQL changes are required for this routing update; the backend logic remains
+the same.
