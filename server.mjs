@@ -10,12 +10,26 @@ const distPath = path.join(__dirname, "dist");
 const apiDistPath = path.join(__dirname, "api-dist");
 
 /**
+ * Create a logger that matches the Azure Functions context.log shape.
+ */
+function createContextLogger() {
+  const log = (...args) => console.log(...args);
+
+  log.error = (...args) => console.error(...args);
+  log.warn = (...args) => console.warn(...args);
+  log.info = (...args) => console.info(...args);
+  log.verbose = (...args) => console.debug(...args);
+
+  return log;
+}
+
+/**
  * Convert an Azure Function-style HTTP handler into an Express handler.
  */
 function adaptAzureFunction(fn) {
   return async (req, res) => {
     const context = {
-      log: console,
+      log: createContextLogger(),
       bindingData: { ...(req.params || {}) },
       req: undefined,
       res: undefined,
