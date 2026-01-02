@@ -1,5 +1,4 @@
-import { createServer } from "http";
-import { readFile, stat } from "fs/promises";
+import express from "express";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -8,98 +7,96 @@ const __dirname = path.dirname(__filename);
 
 const port = process.env.PORT || 8080;
 const distPath = path.join(__dirname, "dist");
-const apiProxyTarget = (process.env.API_PROXY_TARGET || "").replace(/\/$/, "");
+const apiDistPath = path.join(__dirname, "api-dist");
 
-const mimeTypes = {
-  ".html": "text/html; charset=utf-8",
-  ".js": "application/javascript",
-  ".css": "text/css",
-  ".json": "application/json",
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".gif": "image/gif",
-  ".svg": "image/svg+xml",
-  ".ico": "image/x-icon",
-};
+/**
+ * Convert an Azure Function-style HTTP handler into an Express handler.
+ */
+function adaptAzureFunction(fn) {
+  return async (req, res) => {
+    const context = {
+      log: console,
+      bindingData: { ...(req.params || {}) },
+      req: undefined,
+      res: undefined,
+    };
 
-const server = createServer(async (req, res) => {
-  try {
-    const requestedPath = new URL(req.url, `http://${req.headers.host}`).pathname;
+    const httpRequest = {
+      method: req.method,
+      url: req.originalUrl,
+      headers: req.headers,
+      query: req.query,
+      params: req.params,
+      body: req.body,
+    };
 
-    if (requestedPath.startsWith("/api")) {
-      if (!apiProxyTarget) {
-        res.writeHead(502, { "Content-Type": "application/json" });
-        res.end(
-          JSON.stringify({
-            error:
-              "API proxy target is not configured. Set API_PROXY_TARGET to your Azure Function base URL (e.g., https://<function-app>.azurewebsites.net).",
-          })
-        );
-        return;
-      }
-
-      try {
-        const apiUrl = `${apiProxyTarget}${requestedPath}`;
-        const chunks = [];
-
-        for await (const chunk of req) {
-          chunks.push(chunk);
-        }
-
-        const body = chunks.length ? Buffer.concat(chunks) : undefined;
-
-        const outboundHeaders = { ...req.headers };
-        delete outboundHeaders.host;
-
-        const proxyResponse = await fetch(apiUrl, {
-          method: req.method,
-          headers: outboundHeaders,
-          body,
-        });
-
-        const responseBuffer = Buffer.from(await proxyResponse.arrayBuffer());
-        const headers = Object.fromEntries(proxyResponse.headers.entries());
-
-        res.writeHead(proxyResponse.status, headers);
-        res.end(responseBuffer);
-        return;
-      } catch (error) {
-        console.error("Error proxying API request", error);
-        res.writeHead(502, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "Failed to reach API. Please try again later." }));
-        return;
-      }
-    }
-
-    let filePath = path.join(distPath, requestedPath);
-
-    let fileStat;
     try {
-      fileStat = await stat(filePath);
-    } catch {
-      // If the file isn't found, fall back to the SPA entry point
-      filePath = path.join(distPath, "index.html");
-      fileStat = await stat(filePath);
+      await fn(context, httpRequest);
+      const response = context.res || {};
+      const status = response.status ?? (response.jsonBody ? 200 : 204);
+      const headers = response.headers || {};
+
+      if (response.jsonBody !== undefined) {
+        res.status(status).set(headers).json(response.jsonBody);
+        return;
+      }
+
+      if (response.body !== undefined) {
+        res.status(status).set(headers).send(response.body);
+        return;
+      }
+
+      res.status(status).set(headers).end();
+    } catch (error) {
+      console.error("Error handling request", { url: req.originalUrl, error });
+      res.status(500).json({ error: "Internal Server Error" });
     }
+  };
+}
 
-    if (fileStat.isDirectory()) {
-      filePath = path.join(filePath, "index.html");
-    }
+async function createServer() {
+  const app = express();
 
-    const ext = path.extname(filePath).toLowerCase();
-    const contentType = mimeTypes[ext] || "application/octet-stream";
+  // Stripe webhooks require the raw body for signature validation.
+  const stripeWebhook = (await import(path.join(apiDistPath, "stripe-webhook.js"))).default;
+  app.post("/api/stripe-webhook", express.raw({ type: "*/*" }), stripeWebhook);
 
-    const content = await readFile(filePath);
-    res.writeHead(200, { "Content-Type": contentType });
-    res.end(content);
-  } catch (error) {
-    console.error("Error handling request", error);
-    res.writeHead(500, { "Content-Type": "text/plain" });
-    res.end("Internal Server Error");
-  }
-});
+  app.use(express.json());
+  app.use(express.urlencoded({ extended: true }));
 
-server.listen(port, () => {
-  console.log(`Server listening on port ${port}`);
-});
+  const [{ default: authHandler }, { default: assessmentsHandler }, { default: assessmentResultsHandler }, { default: pingHandler }, { default: databasePingHandler }] =
+    await Promise.all([
+      import(path.join(apiDistPath, "auth/index.js")),
+      import(path.join(apiDistPath, "assessments/index.js")),
+      import(path.join(apiDistPath, "assessment-results/index.js")),
+      import(path.join(apiDistPath, "ping/index.js")),
+      import(path.join(apiDistPath, "database-ping/index.js")),
+    ]);
+
+  // API routes
+  app.all("/api/auth/:action?", adaptAzureFunction(authHandler));
+  app.all("/api/assessments/:action?", adaptAzureFunction(assessmentsHandler));
+  app.all("/api/assessment-results/:action?", adaptAzureFunction(assessmentResultsHandler));
+  app.all("/api/ping", adaptAzureFunction(pingHandler));
+  app.all("/api/database-ping", adaptAzureFunction(databasePingHandler));
+
+  // Legacy API routes implemented as plain handlers
+  const createCheckoutHandler = (await import(path.join(apiDistPath, "create-checkout.js"))).default;
+  const sendEmailHandler = (await import(path.join(apiDistPath, "send-email.js"))).default;
+  app.all("/api/create-checkout", createCheckoutHandler);
+  app.all("/api/send-email", sendEmailHandler);
+
+  // Static assets
+  app.use(express.static(distPath));
+
+  // SPA fallback
+  app.get("*", (req, res) => {
+    res.sendFile(path.join(distPath, "index.html"));
+  });
+
+  app.listen(port, () => {
+    console.log(`Server listening on port ${port}`);
+  });
+}
+
+createServer();
