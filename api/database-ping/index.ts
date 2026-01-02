@@ -1,5 +1,5 @@
 import type { AzureFunction, Context, HttpRequest } from "@azure/functions";
-import { query } from "../_shared/db";
+import { query } from "../_shared/db.js";
 
 const databasePingFunction: AzureFunction = async function (context: Context, req: HttpRequest): Promise<void> {
   context.log("database-ping invoked", {

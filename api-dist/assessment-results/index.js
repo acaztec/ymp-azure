@@ -1,4 +1,4 @@
-import { query } from '../_shared/db';
+import { query } from '../_shared/db.js';
 const assessmentResultsFunction = async function (context, req) {
     const action = context.bindingData.action;
     try {

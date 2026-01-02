@@ -1,4 +1,4 @@
-import { query } from "../_shared/db";
+import { query } from "../_shared/db.js";
 const databasePingFunction = async function (context, req) {
     context.log("database-ping invoked", {
         method: req.method,
