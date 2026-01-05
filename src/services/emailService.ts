@@ -1,7 +1,7 @@
 import { CompatibilityInsights, EmailNotification } from '../types';
 import { buildAdvisorForwardingCopy, SAMPLE_REPORT_PLACEHOLDER_URL } from '../utils/advisorForwardingCopy';
 
-const DEFAULT_FROM_ADDRESS = 'Money Personality <notifications@yourmoneypersonality.com>';
+const DEFAULT_FROM_ADDRESS = 'Money Personality <notifications@yourmoneypersonality.ai>';
 // TODO: Update this placeholder address with the real internal lead notification recipient before launch.
 const INTERNAL_NOTIFICATION_RECIPIENT = 'leads-placeholder@yourdomain.com';
 
