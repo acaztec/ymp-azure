@@ -1,7 +1,11 @@
 import { ClientSecretCredential } from "@azure/identity";
 import sql from "mssql";
 
+const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000; // refresh 5 minutes before expiry
+
 let cachedPool = null;
+let cachedToken = null;
+let cachedPoolTokenExpiry = null;
 
 function getEnv(name) {
   const value = process.env[name];
@@ -12,7 +16,14 @@ function getEnv(name) {
   return value;
 }
 
-async function getAccessToken() {
+function isTokenExpiring(token) {
+  if (!token?.expiresOnTimestamp) {
+    return true;
+  }
+  return token.expiresOnTimestamp - Date.now() <= TOKEN_REFRESH_BUFFER_MS;
+}
+
+async function fetchAccessToken() {
   const tenantId = getEnv("AZURE_TENANT_ID");
   const clientId = getEnv("AZURE_CLIENT_ID");
   const clientSecret = getEnv("AZURE_CLIENT_SECRET");
@@ -23,17 +34,48 @@ async function getAccessToken() {
     throw new Error("Failed to acquire access token for Azure SQL.");
   }
 
-  return tokenResponse.token;
+  return tokenResponse;
+}
+
+async function getAccessToken() {
+  if (cachedToken && !isTokenExpiring(cachedToken)) {
+    return cachedToken;
+  }
+
+  cachedToken = await fetchAccessToken();
+  return cachedToken;
+}
+
+async function closeCachedPool() {
+  if (!cachedPool) {
+    return;
+  }
+
+  try {
+    await cachedPool.close();
+  } catch (error) {
+    console.warn("Failed to close cached SQL pool", {
+      error,
+    });
+  } finally {
+    cachedPool = null;
+    cachedPoolTokenExpiry = null;
+  }
 }
 
 export async function getSqlPool() {
-  if (cachedPool && cachedPool.connected) {
-    return cachedPool;
-  }
-
   const server = getEnv("SQL_SERVER_HOST");
   const database = getEnv("SQL_DATABASE_NAME");
   const token = await getAccessToken();
+
+  if (cachedPool && cachedPool.connected && cachedPoolTokenExpiry && !isTokenExpiring({
+    ...token,
+    expiresOnTimestamp: cachedPoolTokenExpiry,
+  })) {
+    return cachedPool;
+  }
+
+  await closeCachedPool();
 
   console.log("Creating new SQL connection pool", {
     server,
@@ -49,12 +91,13 @@ export async function getSqlPool() {
     authentication: {
       type: "azure-active-directory-access-token",
       options: {
-        token,
+        token: token.token,
       },
     },
   };
 
   cachedPool = await sql.connect(config);
+  cachedPoolTokenExpiry = token.expiresOnTimestamp ?? null;
   return cachedPool;
 }
 
