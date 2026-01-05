@@ -20,7 +20,7 @@ picked up by the serverless email endpoint at `api/send-email.js`.
 
 Transactional email bodies are generated inside
 `src/services/emailService.ts`, where you can adjust copy, styling, or the
-default `from` address (`Money Personality <notifications@yourmoneypersonality.com>`).
+default `from` address (`Money Personality <notifications@yourmoneypersonality.ai>`).
 Make sure any sender address you use has been verified within your SendGrid
 account (either via domain authentication or a single sender). All HTML content is
 passed directly to SendGrid in the API request, so you can modify it in code without
