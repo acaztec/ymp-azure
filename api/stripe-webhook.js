@@ -22,6 +22,7 @@ async function buffer(readable) {
 }
 
 export default async function handler(req, res) {
+  console.log('whsec prefix:', process.env.STRIPE_WEBHOOK_SECRET?.slice(0, 10));
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'Method not allowed' });
     return;
@@ -30,6 +31,8 @@ export default async function handler(req, res) {
   let event;
 
   try {
+    console.log('isBuffer', Buffer.isBuffer(req.body));
+    console.log('len', req.body?.length);
     const buf = Buffer.isBuffer(req.body) ? req.body : await buffer(req);
     const sig = req.headers['stripe-signature'];
 
