@@ -30,7 +30,7 @@ export default async function handler(req, res) {
   let event;
 
   try {
-    const buf = await buffer(req);
+    const buf = Buffer.isBuffer(req.body) ? req.body : await buffer(req);
     const sig = req.headers['stripe-signature'];
 
     if (!sig) {
